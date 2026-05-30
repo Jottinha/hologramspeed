@@ -141,3 +141,9 @@
 	height: 100%;
 	background: var(--rpm-fill);
 }
+/* Outrun: exibir apenas velocimetro + unidade, ocultar RPM, marcha, ABS e freio de mao */
+#gearDisplay,
+#absContainer,
+#hBrakeContainer,
+#rpmBarBg,
+#rpmBar { display: none !important; }

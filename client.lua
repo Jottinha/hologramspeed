@@ -7,7 +7,7 @@ local HologramURI        = string.format("nui://%s/ui/hologram.html", ResourceNa
 local AttachmentOffset   = vec3(2.5, -1, 0.85)
 local AttachmentRotation = vec3(0, 0, -15)
 local HologramModel      = `hologram_box_model`
-local UpdateFrequency    = 0 -- If less than average frame time, there will be an update every tick regardless of the actual number specified.
+local UpdateFrequency    = 50 -- ms entre updates do velocimetro (0 = todo frame; 50ms = 20x/seg, imperceptível)
 local SettingKey         = string.format("%s:profile", GetCurrentServerEndpoint()) -- The key to store the current theme setting in. As themes are per server, this key is also.
 local DBG                = false -- Enables debug information, not very useful unless you know what you are doing!
 
@@ -19,7 +19,7 @@ local usingMetric, shouldUseMetric = ShouldUseMetricMeasurements() -- Used to tr
 local textureReplacementMade       = false -- Due to some weirdness with the experimental replace texture native, we need to make the replacement after the anchor has been spawned in-game
 
 -- Preferences
-local displayEnabled = false
+local displayEnabled = true
 local currentTheme   = GetConvar("hsp_defaultTheme", "default")
 
 function DebugPrint(...)
@@ -339,6 +339,13 @@ CreateThread(function()
 
 					-- Until the player is no longer driving this vehicle, update the UI
 					repeat
+						-- Se o jogo deletou o hologram (entidade orfã), recria e reancoра
+						if not DoesEntityExist(hologramObject) then
+							hologramObject = CreateHologram(HologramModel, currentVehicle)
+							AttachHologramToVehicle(hologramObject, currentVehicle)
+							DebugPrint("DUI anchor recriado (foi deletado pelo engine)")
+						end
+
 						vehicleSpeed = GetEntitySpeed(currentVehicle)
 
 						EnsureDuiMessage {
