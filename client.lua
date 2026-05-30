@@ -15,6 +15,7 @@ local DBG                = false -- Enables debug information, not very useful u
 local duiObject                    = false -- The DUI object, used for messaging and is destroyed when the resource is stopped
 local duiIsReady                   = false -- Set by a callback triggered by DUI once the javascript has fully loaded
 local hologramObject               = 0 -- The current DUI anchor. 0 when one does not exist
+local attachedVehicle              = 0 -- O veículo ao qual o holograma está anexado no momento (0 = nenhum)
 local usingMetric, shouldUseMetric = ShouldUseMetricMeasurements() -- Used to track the status of the metric measurement setting
 local textureReplacementMade       = false -- Due to some weirdness with the experimental replace texture native, we need to make the replacement after the anchor has been spawned in-game
 
@@ -80,11 +81,24 @@ end
 function UpdateEntityAttach()
 	local playerPed, currentVehicle
 	playerPed = PlayerPedId()
-	if IsPedInAnyVehicle(playerPed) then
+	if IsPedInAnyVehicle(playerPed) and hologramObject ~= 0 and DoesEntityExist(hologramObject) then
 		currentVehicle = GetVehiclePedIsIn(playerPed, false)
 		-- Attach the hologram to the vehicle
 		AttachEntityToEntity(hologramObject, currentVehicle, GetEntityBoneIndexByName(currentVehicle, "chassis"), AttachmentOffset, AttachmentRotation, false, false, false, false, false, true)
+		attachedVehicle = currentVehicle
 		DebugPrint(string.format("DUI anchor %s attached to %s", hologramObject, currentVehicle))
+	end
+end
+
+-- Destrói o holograma com segurança e zera os handles.
+-- Sempre usar isto antes de recriar para nunca vazar entidades órfãs.
+function DestroyHologram()
+	if hologramObject ~= 0 then
+		if DoesEntityExist(hologramObject) then
+			DeleteVehicle(hologramObject)
+		end
+		hologramObject  = 0
+		attachedVehicle = 0
 	end
 end
 
@@ -293,25 +307,38 @@ CreateThread(function()
 		end
 	end)
 
-	local playerPed, currentVehicle, vehicleSpeed
+	-- Garante que o modelo do holograma esteja carregado, com timeout.
+	-- Retorna false se não conseguir carregar (evita busy-wait infinito).
+	local function ensureHologramModel()
+		if HasModelLoaded(HologramModel) then return true end
+		RequestModel(HologramModel)
+		local waited = 0
+		while not HasModelLoaded(HologramModel) and waited < 5000 do
+			Wait(50)
+			waited = waited + 50
+		end
+		return HasModelLoaded(HologramModel)
+	end
 
+	-- Loop único e idempotente:
+	--   * revalida o veículo a cada tick (nunca opera sobre handle 0/deletado);
+	--   * mantém UM ÚNICO holograma, reaproveitado entre carros (re-anexa em vez
+	--     de recriar) — sem vazar entidades;
+	--   * calcula display todo frame, então nunca fica preso em display=false.
 	while true do
-		playerPed = PlayerPedId()
+		local playerPed      = PlayerPedId()
+		local currentVehicle = GetVehiclePedIsIn(playerPed, false)
+		local isDriver       = currentVehicle ~= 0
+			and DoesEntityExist(currentVehicle)
+			and GetPedInVehicleSeat(currentVehicle, -1) == playerPed
 
-		if IsPedInAnyVehicle(playerPed) then
-			currentVehicle = GetVehiclePedIsIn(playerPed, false)
-
-			-- When the player is in the drivers seat of their current vehicle...
-			if GetPedInVehicleSeat(currentVehicle, -1) == playerPed then
-				-- Ensure the display is off before we start
-				EnsureDuiMessage {display = false}
-
-				-- Load the hologram model
-				RequestModel(HologramModel)
-				repeat Wait(0) until HasModelLoaded(HologramModel)
-
-				-- Create the hologram object
-				hologramObject = CreateHologram(HologramModel,currentVehicle)
+		if isDriver and ensureHologramModel() then
+			-- (Re)cria o holograma só se ele não existir; senão reaproveita.
+			if hologramObject == 0 or not DoesEntityExist(hologramObject) then
+				DestroyHologram() -- limpa qualquer handle órfão antes de criar
+				hologramObject = CreateHologram(HologramModel, currentVehicle)
+				AttachHologramToVehicle(hologramObject, currentVehicle)
+				attachedVehicle = currentVehicle
 
 				-- Odd hacky fix for people who's textures won't replace properly
 				if not textureReplacementMade then
@@ -319,65 +346,33 @@ CreateThread(function()
 					DebugPrint("Texture replacement made")
 					textureReplacementMade = true
 				end
-
 				SetModelAsNoLongerNeeded(HologramModel)
-
-				-- If the ped's current vehicle still exists and they are still driving it...
-				if DoesEntityExist(currentVehicle) and GetPedInVehicleSeat(currentVehicle, -1) == playerPed then
-					-- Attach the hologram to the vehicle
-					AttachHologramToVehicle(hologramObject,currentVehicle)
-
-					-- Wait until the engine is on before enabling the hologram proper
-					repeat 
-						Wait(0)
-						if GetVehiclePedIsIn(playerPed, false)~=currentVehicle then
-							currentVehicle = GetVehiclePedIsIn(playerPed, false)
-							hologramObject = CreateHologram(HologramModel,currentVehicle)
-							AttachHologramToVehicle(hologramObject,currentVehicle)
-						end
-					until IsVehicleEngineOn(currentVehicle)
-
-					-- Until the player is no longer driving this vehicle, update the UI
-					repeat
-						-- Se o jogo deletou o hologram (entidade orfã), recria e reancoра
-						if not DoesEntityExist(hologramObject) then
-							hologramObject = CreateHologram(HologramModel, currentVehicle)
-							AttachHologramToVehicle(hologramObject, currentVehicle)
-							DebugPrint("DUI anchor recriado (foi deletado pelo engine)")
-						end
-
-						vehicleSpeed = GetEntitySpeed(currentVehicle)
-
-						EnsureDuiMessage {
-							display  = displayEnabled and IsVehicleEngineOn(currentVehicle),
-							rpm      = GetVehicleCurrentRpm(currentVehicle),
-							gear     = GetVehicleCurrentGear(currentVehicle),
-							abs      = (GetVehicleWheelSpeed(currentVehicle, 0) == 0.0) and (vehicleSpeed > 0.0),
-							hBrake   = GetVehicleHandbrake(currentVehicle),
-							rawSpeed = vehicleSpeed,
-						}
-
-						-- Wait for the next frame or half a second if we aren't displaying
-						Wait(displayEnabled and UpdateFrequency or 500)
-					until GetPedInVehicleSeat(currentVehicle, -1) ~= PlayerPedId()
-				end
+			elseif attachedVehicle ~= currentVehicle then
+				-- Trocou de carro (ex.: respawn de rodada do outrun): só re-anexa.
+				AttachHologramToVehicle(hologramObject, currentVehicle)
+				attachedVehicle = currentVehicle
+				DebugPrint("DUI anchor re-anexado ao novo veículo "..tostring(currentVehicle))
 			end
-		end
 
-		-- At this point, the player is no longer driving a vehicle or was never driving a vehicle this cycle 
+			local vehicleSpeed = GetEntitySpeed(currentVehicle)
+			EnsureDuiMessage {
+				display  = displayEnabled and IsVehicleEngineOn(currentVehicle),
+				rpm      = GetVehicleCurrentRpm(currentVehicle),
+				gear     = GetVehicleCurrentGear(currentVehicle),
+				abs      = (GetVehicleWheelSpeed(currentVehicle, 0) == 0.0) and (vehicleSpeed > 0.0),
+				hBrake   = GetVehicleHandbrake(currentVehicle),
+				rawSpeed = vehicleSpeed,
+			}
 
-		-- If there is a hologram object currently created...
-		if hologramObject ~= 0 and DoesEntityExist(hologramObject) then
-			-- Delete the hologram object
-			DeleteVehicle(hologramObject)
-			DebugPrint("DUI anchor deleted "..tostring(hologramObject))
+			Wait(displayEnabled and UpdateFrequency or 500)
 		else
-			-- Instead of setting this in the above block, clearing the handle here ensures that the entity must not exist before it's handle is lost.
-			hologramObject = 0
-		end
+			-- Não está dirigindo: derruba o holograma (se houver) e esconde o display.
+			DestroyHologram()
+			EnsureDuiMessage {display = false}
 
-		-- We don't need to check every single frame for the player being in a vehicle so we check every second
-		Wait(1000)
+			-- Checa com menos frequência quando não há nada a exibir.
+			Wait(500)
+		end
 	end
 end)
  
@@ -390,10 +385,8 @@ AddEventHandler("onResourceStop", function(resource)
 		displayEnabled = false
 		DebugPrint("\tDisplay disabled")
 
-		if DoesEntityExist(hologramObject) then
-			DeleteVehicle(hologramObject)
-			DebugPrint("\tDUI anchor deleted "..tostring(hologramObject))
-		end
+		DestroyHologram()
+		DebugPrint("\tDUI anchor deleted")
 
 		RemoveReplaceTexture("hologram_box_model", "p_hologram_box")
 		DebugPrint("\tReplace texture removed")
