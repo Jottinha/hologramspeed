@@ -325,6 +325,11 @@ CreateThread(function()
 	--   * mantém UM ÚNICO holograma, reaproveitado entre carros (re-anexa em vez
 	--     de recriar) — sem vazar entidades;
 	--   * calcula display todo frame, então nunca fica preso em display=false.
+	-- Tolerancia antes de destruir o holograma em interrupcoes curtas (ex.:
+	-- teleporte do outrun, que tira o player do carro por ate ~3s).
+	local GRACE_MS        = 4000
+	local notDrivingSince = 0 -- ms de quando deixou de dirigir; 0 = dirigindo
+
 	while true do
 		local playerPed      = PlayerPedId()
 		local currentVehicle = GetVehiclePedIsIn(playerPed, false)
@@ -333,6 +338,8 @@ CreateThread(function()
 			and GetPedInVehicleSeat(currentVehicle, -1) == playerPed
 
 		if isDriver and ensureHologramModel() then
+			notDrivingSince = 0
+
 			-- (Re)cria o holograma só se ele não existir; senão reaproveita.
 			if hologramObject == 0 or not DoesEntityExist(hologramObject) then
 				DestroyHologram() -- limpa qualquer handle órfão antes de criar
@@ -354,9 +361,12 @@ CreateThread(function()
 				DebugPrint("DUI anchor re-anexado ao novo veículo "..tostring(currentVehicle))
 			end
 
+			-- reexibe caso tenha sido escondido durante uma janela de grace
+			SetEntityVisible(hologramObject, true, false)
+
 			local vehicleSpeed = GetEntitySpeed(currentVehicle)
 			EnsureDuiMessage {
-				display  = displayEnabled and IsVehicleEngineOn(currentVehicle),
+				display  = displayEnabled,
 				rpm      = GetVehicleCurrentRpm(currentVehicle),
 				gear     = GetVehicleCurrentGear(currentVehicle),
 				abs      = (GetVehicleWheelSpeed(currentVehicle, 0) == 0.0) and (vehicleSpeed > 0.0),
@@ -365,12 +375,28 @@ CreateThread(function()
 			}
 
 			Wait(displayEnabled and UpdateFrequency or 500)
-		else
-			-- Não está dirigindo: derruba o holograma (se houver) e esconde o display.
-			DestroyHologram()
-			EnsureDuiMessage {display = false}
+		elseif hologramObject ~= 0 and DoesEntityExist(hologramObject) then
+			-- Nao esta dirigindo MAS o holograma existe: pode ser interrupcao curta
+			-- (teleporte do outrun). Segura por GRACE_MS antes de destruir, mantendo
+			-- a entidade viva e so escondendo o display ate reanexar no carro novo.
+			if notDrivingSince == 0 then
+				notDrivingSince = GetGameTimer()
+			end
 
-			-- Checa com menos frequência quando não há nada a exibir.
+			if GetGameTimer() - notDrivingSince < GRACE_MS then
+				SetEntityVisible(hologramObject, false, false)
+				EnsureDuiMessage {display = false}
+				Wait(100) -- checa rapido pra reanexar assim que o warp terminar
+			else
+				DestroyHologram()
+				EnsureDuiMessage {display = false}
+				notDrivingSince = 0
+				Wait(500)
+			end
+		else
+			-- A pe e sem holograma: nada a fazer, checa devagar.
+			EnsureDuiMessage {display = false}
+			notDrivingSince = 0
 			Wait(500)
 		end
 	end
