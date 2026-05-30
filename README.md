@@ -13,18 +13,22 @@ Hologram Speedometer for FiveM
 4. Add `ensure hologramspeed` to your server.cfg
 5. Restart the server
 
-## Convars
-| Name             | Description                                         | Type   | Example   |
-| ---------------- | --------------------------------------------------- | :----: | --------- |
-| hsp_defaultTheme | The default theme applied to the speedometer        | String | "default" |
+## Simplified version
+
+This is a stripped-down fork focused on being **just a holographic speedometer**.
+Removed compared to the original: theme system, saved KVP profiles and the
+`offset`/`rotate` commands. It now displays only speed, gear and RPM (all read
+directly from the game).
+
+It was also hardened against the "stops working after a while" problem:
+- the hologram entity is flagged as a mission entity, so the engine no longer
+  despawns it via population cleanup;
+- the model stays loaded (it is a tiny box);
+- the DUI texture is **re-applied on every (re)creation**, so the hologram never
+  comes back blank after a respawn/teleport.
 
 ## Commands
-- `/hsp` - Toggle the speedometer
-- `/hsp theme <name>` - Set the theme of the speedometer, the default theme is `default`.
-- `/hsp offset <x> <y> <z>` - Set the offset of the speedometer, leave xyz to blank will reset to default offset.
-- `/hsp rotate <x> <y> <z>` - Set the rotate of the speedometer, leave xyz to blank will reset to default rotate.
-
-Example use: `/hsp theme nve` (Set the theme to `nve`, the theme for NaturalVision Evolved)
+- `/hsp` - Toggle the speedometer on/off (also bound to the `` ` `` key by default).
 
 ## FAQ
 | FAQ |
